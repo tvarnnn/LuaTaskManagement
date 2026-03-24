@@ -1,35 +1,31 @@
 -- storage.lua
--- Handles saving and loading tasks to/from a file using LOVE's filesystem
+-- Saves and loads tasks to/from a local file using plain Lua io
 
 local storage = {}
 
-local FILE = "tasks.lua"
+local FILE = "tasks_data.lua"
 
 function storage.save(task_list)
-    local lines = { "return {\n" }
+    local file = io.open(FILE, "w")
+    if not file then
+        print("Warning: could not open " .. FILE .. " for writing")
+        return
+    end
+    file:write("return {\n")
     for _, t in ipairs(task_list) do
-        table.insert(lines, string.format(
+        file:write(string.format(
             "  {id=%d, name=%q, due_date=%q, description=%q, status=%q, priority=%d},\n",
             t.id, t.name, t.due_date, t.description, t.status, t.priority
         ))
     end
-    table.insert(lines, "}\n")
-    love.filesystem.write(FILE, table.concat(lines))
+    file:write("}\n")
+    file:close()
 end
 
 function storage.load()
-    if not love.filesystem.getInfo(FILE) then
-        return {}
-    end
-    local content = love.filesystem.read(FILE)
-    if not content then return {} end
-
-    local fn, err = load(content)
-    if fn then
-        local ok, data = pcall(fn)
-        if ok and type(data) == "table" then
-            return data
-        end
+    local ok, data = pcall(dofile, FILE)
+    if ok and type(data) == "table" then
+        return data
     end
     return {}
 end
