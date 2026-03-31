@@ -1,10 +1,20 @@
--- tasks.lua
--- Manages the in-memory task list and all CRUD operations
+-- task_manager.lua
+-- In-memory task store and all CRUD operations.
+-- Each task is a Lua table (used here as a struct) with the following fields:
+--   id          (number)  : unique auto-incremented identifier
+--   name        (string)  : short title of the task
+--   due_date    (string)  : due date in YYYY-MM-DD format, or "" if not set
+--   description (string)  : optional longer description
+--   status      (string)  : "pending" or "done"
+--   priority    (number)  : 1 = High, 2 = Medium, 3 = Low
 
-local tasks = {}
-local task_list = {}
-local next_id = 1
+local tasks = {}       -- public module table
+local task_list = {}   -- internal array of task tables
+local next_id = 1      -- auto-increment counter for task IDs
 
+-- tasks.add(name, due_date, description, priority)
+-- Creates a new task and appends it to the task list.
+-- Priority defaults to 2 (Medium) if not provided.
 function tasks.add(name, due_date, description, priority)
     table.insert(task_list, {
         id          = next_id,
@@ -17,6 +27,9 @@ function tasks.add(name, due_date, description, priority)
     next_id = next_id + 1
 end
 
+-- tasks.delete(id)
+-- Removes the task with the given id from the list.
+-- Uses ipairs to iterate with index so we can call table.remove safely.
 function tasks.delete(id)
     for i, t in ipairs(task_list) do
         if t.id == id then
@@ -26,6 +39,9 @@ function tasks.delete(id)
     end
 end
 
+-- tasks.complete(id)
+-- Marks the task with the given id as "done".
+-- Status is stored as a string so it can be compared directly in the UI.
 function tasks.complete(id)
     for _, t in ipairs(task_list) do
         if t.id == id then
@@ -35,26 +51,34 @@ function tasks.complete(id)
     end
 end
 
+-- tasks.get_all()
+-- Returns the raw task list table (by reference).
+-- Used when saving to storage so we always write the full current state.
 function tasks.get_all()
     return task_list
 end
 
--- Returns a copy of the task list sorted by priority (high first), then by id
+-- tasks.get_sorted()
+-- Returns a shallow copy of the task list sorted by priority ascending (1=High first),
+-- with ties broken by id ascending so the order is always deterministic.
 function tasks.get_sorted()
     local sorted = {}
     for _, t in ipairs(task_list) do
         table.insert(sorted, t)
     end
+    -- table.sort uses an in-place comparison function (closure)
     table.sort(sorted, function(a, b)
         if a.priority ~= b.priority then
-            return a.priority < b.priority
+            return a.priority < b.priority  -- lower number = higher priority
         end
-        return a.id < b.id
+        return a.id < b.id  -- stable secondary sort by insertion order
     end)
     return sorted
 end
 
--- Called on startup to populate from saved data
+-- tasks.load_tasks(data)
+-- Replaces the in-memory task list with data loaded from storage.
+-- Also recalculates next_id so new tasks never collide with loaded ones.
 function tasks.load_tasks(data)
     task_list = data
     next_id = 1

@@ -1,21 +1,30 @@
 -- server.lua
 -- HTTP server entry point — run with: lua server.lua
+-- Listens on localhost:8080 and handles all routing, HTML generation,
+-- and request/response handling using the LuaSocket library.
+-- All task logic is delegated to task_manager.lua; persistence to storage.lua.
 
-local socket  = require("socket")
-local tasks   = require("task_manager")
-local storage = require("storage")
+local socket  = require("socket")   -- LuaSocket: TCP server and sleep
+local tasks   = require("task_manager")  -- in-memory CRUD operations
+local storage = require("storage")       -- file-based persistence
 
-local HOST = "127.0.0.1"
+local HOST = "127.0.0.1"  -- only accept connections from localhost
 local PORT = 8080
 
 -- ─── Utilities ───────────────────────────────────────────────────────────────
 
+-- url_decode(s)
+-- Decodes a URL-encoded string: converts "+" back to spaces and "%XX" hex
+-- sequences back to their ASCII characters. Used when parsing form POST bodies.
 local function url_decode(s)
     return s:gsub("+", " "):gsub("%%(%x%x)", function(h)
         return string.char(tonumber(h, 16))
     end)
 end
 
+-- parse_form(body)
+-- Parses an application/x-www-form-urlencoded POST body into a key-value table.
+-- Example: "name=Buy+milk&priority=1" -> { name = "Buy milk", priority = "1" }
 local function parse_form(body)
     local p = {}
     for k, v in (body or ""):gmatch("([^&=]+)=([^&=]*)") do
@@ -26,9 +35,15 @@ end
 
 -- ─── HTML Generation ─────────────────────────────────────────────────────────
 
+-- Lookup tables indexed by priority number (1/2/3) for display label and badge color.
+-- Using tables here avoids a chain of if-else checks every time a row renders.
 local PRIORITY_LABELS = { "High", "Medium", "Low" }
 local PRIORITY_COLORS = { "#e05555", "#d4a017", "#4caf50" }
 
+-- task_row(task)
+-- Builds and returns the HTML string for a single table row.
+-- Done tasks get a strikethrough name and no "Done" button.
+-- Buttons POST to /complete/<id> and /delete/<id> respectively.
 local function task_row(task)
     local color = PRIORITY_COLORS[task.priority] or "#888"
     local label = PRIORITY_LABELS[task.priority] or "?"
@@ -66,6 +81,10 @@ local function task_row(task)
     )
 end
 
+-- render_page(sorted_tasks)
+-- Builds and returns the full HTML page as a string.
+-- Accepts the pre-sorted task list and injects rows into the table body.
+-- Uses %% inside the CSS block to escape literal % signs in string.format.
 local function render_page(sorted_tasks)
     local rows = {}
     for _, t in ipairs(sorted_tasks) do
@@ -268,6 +287,12 @@ end
 
 -- ─── HTTP Helpers ────────────────────────────────────────────────────────────
 
+-- read_request(client)
+-- Reads a full HTTP request from the client socket.
+-- Headers are read line-by-line until the blank line separator.
+-- For POST requests, Content-Length is extracted so we can read the exact
+-- number of body bytes — avoids blocking or reading too much.
+-- Returns: method (string), path (string), body (string)
 local function read_request(client)
     local lines = {}
     local line  = client:receive()
@@ -276,6 +301,7 @@ local function read_request(client)
         line = client:receive()
     end
 
+    -- First line of an HTTP request is always "METHOD /path HTTP/1.x"
     local method, path = (lines[1] or ""):match("(%u+) (/[^ ]*)")
 
     local body = ""
@@ -291,10 +317,16 @@ local function read_request(client)
     return method, path, body
 end
 
+-- redirect(client)
+-- Sends an HTTP 302 redirect back to the root "/" after any POST action.
+-- This implements the Post/Redirect/Get pattern so refreshing doesn't resubmit.
 local function redirect(client)
     client:send("HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 end
 
+-- send_html(client, html)
+-- Sends an HTTP 200 response with the given HTML string as the body.
+-- Content-Length is set to the byte length of the HTML string using the # operator.
 local function send_html(client, html)
     client:send(
         "HTTP/1.1 200 OK\r\n" ..
@@ -307,8 +339,11 @@ end
 
 -- ─── Startup ─────────────────────────────────────────────────────────────────
 
+-- Load any previously saved tasks from disk into memory on startup.
 tasks.load_tasks(storage.load())
 
+-- Seed with sample tasks if the data file was empty or missing.
+-- This ensures the UI is never blank on first run.
 if #tasks.get_all() == 0 then
     tasks.add("Read Lua documentation", "2026-03-25", "Cover tables and metatables", 1)
     tasks.add("Build task input form",  "2026-03-27", "Name, date, desc, priority",  2)
@@ -317,6 +352,8 @@ if #tasks.get_all() == 0 then
     storage.save(tasks.get_all())
 end
 
+-- Bind the TCP server socket. settimeout(0) makes accept() non-blocking
+-- so the main loop can use socket.sleep() instead of hanging on idle connections.
 local server = assert(socket.bind(HOST, PORT), "Could not bind to port " .. PORT)
 server:settimeout(0)
 
@@ -324,17 +361,26 @@ print("Task Manager running at http://localhost:" .. PORT)
 print("Press Ctrl+C to stop.\n")
 
 -- ─── Main Loop ───────────────────────────────────────────────────────────────
+-- Continuously polls for incoming connections. When a client connects:
+--   1. Read the HTTP request (wrapped in pcall to handle dropped connections)
+--   2. Route based on method + path
+--   3. Close the connection (HTTP/1.0 style — one request per connection)
+-- socket.sleep(0.01) yields the CPU between polls to avoid busy-waiting.
 
 while true do
     local client = server:accept()
     if client then
-        client:settimeout(5)
+        client:settimeout(5)  -- 5s timeout so a stalled client doesn't block the loop
+
+        -- pcall catches any socket errors during reading so the server stays up
         local ok, method, path, body = pcall(read_request, client)
 
         if ok and method then
+            -- GET / : render the full task list page
             if method == "GET" and path == "/" then
                 send_html(client, render_page(tasks.get_sorted()))
 
+            -- POST /add : create a new task from form data, then redirect
             elseif method == "POST" and path == "/add" then
                 local p = parse_form(body)
                 if p.name and p.name ~= "" then
@@ -343,6 +389,7 @@ while true do
                 end
                 redirect(client)
 
+            -- POST /complete/<id> or /delete/<id> : update task state, then redirect
             elseif method == "POST" then
                 local id = tonumber(path:match("/complete/(%d+)"))
                 if id then tasks.complete(id); storage.save(tasks.get_all()) end
@@ -356,5 +403,5 @@ while true do
 
         client:close()
     end
-    socket.sleep(0.01)
+    socket.sleep(0.01)  -- prevent busy-loop; yields ~10ms between connection checks
 end
