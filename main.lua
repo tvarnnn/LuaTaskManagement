@@ -109,6 +109,55 @@ local function delete_task()
     print("  Task deleted.")
 end
 
+-- edit_task()
+-- Allows the user to modify an existing task by its ID.
+local function edit_task()
+    print("\n── Edit Task ──")
+    view_tasks()
+
+    local id = tonumber(prompt("\n  Enter task ID to edit: "))
+    if not id then
+        print("  Invalid ID. Cancelled.")
+        return
+    end
+
+    local task = tasks.getById(id)
+    if not task then
+        print("  Task not found.")
+        return
+    end
+
+    print("  Leave fields blank to keep current values.\n")
+
+    local name = prompt("  New Name [" .. task.name .. "]: ")
+    if name == "" then name = task.name end
+
+    local due_date = prompt("  New Due Date [" .. (task.due_date ~= "" and task.due_date or "—") .. "]: ")
+    if due_date == "" then due_date = task.due_date end
+
+    local description = prompt("  New Description [" .. (task.description ~= "" and task.description or "—") .. "]: ")
+    if description == "" then description = task.description end
+
+    print("  Priority: 1=High  2=Medium  3=Low")
+    local pInput = prompt("  New Priority [" .. task.priority .. "]: ")
+    if pInput == "" then pInput = tostring(task.priority) end
+    local priority = tonumber(pInput)
+    
+    if not priority then
+        print("  Invalid priority. Keeping current value.")
+        priority = task.priority
+    end
+    if priority < 1 or priority > 3 then
+        print("  Out of bounds. Keeping current value.")
+        priority = task.priority
+    end
+
+    tasks.update(id, name, due_date, description, priority)
+    storage.save(tasks.get_all())
+
+    print("  Task updated.")
+end
+
 -- ─── Main Menu ───────────────────────────────────────────────────────────────
 
 -- print_menu()
@@ -121,6 +170,7 @@ local function print_menu()
     print("║  2. Add task             ║")
     print("║  3. Complete task        ║")
     print("║  4. Delete task          ║")
+    print("║  5. Edit task            ║")
     print("║  0. Exit                 ║")
     print("╚══════════════════════════╝")
 end
@@ -155,10 +205,12 @@ while true do
         complete_task()
     elseif choice == "4" then
         delete_task()
+    elseif choice == "5" then
+        edit_task()
     elseif choice == "0" then
         print("\nGoodbye!\n")
         break
     else
-        print("  Invalid option. Please enter 0-4.")
+        print("  Invalid option. Please enter 0-5.")
     end
 end

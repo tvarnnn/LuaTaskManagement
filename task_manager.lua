@@ -89,4 +89,28 @@ function tasks.load_tasks(data)
     end
 end
 
+-- tasks.get_by_id(id)
+-- Returns the task table with the given id, or nil if not found.
+-- loop has unused indexing variable "_"
+function tasks.getById(id)
+    for _, t in ipairs(task_list) do
+        if t.id == id then
+            return t
+        end
+    end
+    return nil
+end
+
+-- tasks.update(id, name, due_date, description, priority)
+-- Updates the fields of the task with the given id using tasks.getById to find it.
+function tasks.update(id, name, due_date, description, priority)
+    local task = tasks.getById(id)
+    if not task then return end
+
+    task.name = name
+    task.due_date = due_date
+    task.description = description
+    task.priority = priority
+end
+
 return tasks
