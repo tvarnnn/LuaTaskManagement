@@ -27,6 +27,25 @@ function tasks.add(name, due_date, description, priority)
     next_id = next_id + 1
 end
 
+-- tasks.restore(id, name, due_date, description, priority)
+-- Re-inserts a previously deleted task using its ORIGINAL id and fields.
+-- Status is always reset to "pending" on restore.
+-- next_id is advanced only if the restored id would collide with future ids.
+function tasks.restore(id, name, due_date, description, priority)
+    table.insert(task_list, {
+        id          = id,
+        name        = name,
+        due_date    = due_date,
+        description = description,
+        status      = "pending",
+        priority    = priority or 2
+    })
+    -- Keep next_id ahead of any restored id to avoid future collisions
+    if id >= next_id then
+        next_id = id + 1
+    end
+end
+
 -- tasks.delete(id)
 -- Removes the task with the given id from the list.
 -- Uses ipairs to iterate with index so we can call table.remove safely.
@@ -87,30 +106,6 @@ function tasks.load_tasks(data)
             next_id = t.id + 1
         end
     end
-end
-
--- tasks.get_by_id(id)
--- Returns the task table with the given id, or nil if not found.
--- loop has unused indexing variable "_"
-function tasks.getById(id)
-    for _, t in ipairs(task_list) do
-        if t.id == id then
-            return t
-        end
-    end
-    return nil
-end
-
--- tasks.update(id, name, due_date, description, priority)
--- Updates the fields of the task with the given id using tasks.getById to find it.
-function tasks.update(id, name, due_date, description, priority)
-    local task = tasks.getById(id)
-    if not task then return end
-
-    task.name = name
-    task.due_date = due_date
-    task.description = description
-    task.priority = priority
 end
 
 return tasks
