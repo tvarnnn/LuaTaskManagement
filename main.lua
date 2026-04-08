@@ -2,9 +2,11 @@
 -- Terminal entry point for the Task Manager.
 -- Run with: lua main.lua
 -- All task logic lives in task_manager.lua; persistence in storage.lua.
+-- History tracking (completed/deleted tasks) lives in history.lua.
 
 local tasks   = require("task_manager")
 local storage = require("storage")
+local history = require("task_history")
 
 -- ─── Display Helpers ─────────────────────────────────────────────────────────
 
@@ -31,6 +33,29 @@ local function print_tasks(task_list)
             t.due_date ~= "" and t.due_date or "—",
             t.description ~= "" and t.description or "—",
             t.status))
+    end
+end
+
+-- print_history(entries)
+-- Prints history entries in a formatted table.
+-- Shows original id, action, priority, name, due date, and timestamp.
+local function print_history(entries)
+    if #entries == 0 then
+        print("  (no history yet)")
+        return
+    end
+    print(string.format("  %-4s %-10s %-8s %-25s %-12s %s",
+        "ID", "Action", "Priority", "Name", "Due Date", "Timestamp"))
+    print("  " .. string.rep("-", 82))
+    for _, e in ipairs(entries) do
+        local label = PRIORITY_LABELS[e.priority] or "?"
+        print(string.format("  %-4d %-10s %-8s %-25s %-12s %s",
+            e.id,
+            e.action,
+            label,
+            e.name,
+            e.due_date ~= "" and e.due_date or "—",
+            e.timestamp))
     end
 end
 
@@ -80,7 +105,7 @@ local function add_task()
 end
 
 -- complete_task()
--- Marks a task as done by its ID.
+-- Marks a task as done by its ID and records it in history.
 local function complete_task()
     print("\n── Complete Task ──")
     view_tasks()
@@ -89,13 +114,31 @@ local function complete_task()
         print("  Invalid ID. Cancelled.")
         return
     end
+
+    -- Find the task first so we can snapshot it for history before completing it
+    local found = nil
+    for _, t in ipairs(tasks.get_all()) do
+        if t.id == id then
+            found = t
+            break
+        end
+    end
+
+    if not found then
+        print("  Task ID not found. Cancelled.")
+        return
+    end
+
+    -- Record in history BEFORE mutating status
+    history.record(found, "completed")
     tasks.complete(id)
     storage.save(tasks.get_all())
+    history.save()
     print("  Task marked as done.")
 end
 
 -- delete_task()
--- Permanently removes a task by its ID.
+-- Permanently removes a task by its ID and records it in history.
 local function delete_task()
     print("\n── Delete Task ──")
     view_tasks()
@@ -104,58 +147,160 @@ local function delete_task()
         print("  Invalid ID. Cancelled.")
         return
     end
+
+    -- Find the task first so we can snapshot it for history before deletion
+    local found = nil
+    for _, t in ipairs(tasks.get_all()) do
+        if t.id == id then
+            found = t
+            break
+        end
+    end
+
+    if not found then
+        print("  Task ID not found. Cancelled.")
+        return
+    end
+
+    -- Record in history BEFORE removing from the list
+    history.record(found, "deleted")
     tasks.delete(id)
     storage.save(tasks.get_all())
+    history.save()
     print("  Task deleted.")
 end
 
--- edit_task()
--- Allows the user to modify an existing task by its ID.
-local function edit_task()
-    print("\n── Edit Task ──")
-    view_tasks()
+-- print_history_indexed(entries)
+-- Like print_history but also shows a list index (#) so the user can
+-- reference an entry by number when choosing to undo.
+local function print_history_indexed(entries)
+    if #entries == 0 then
+        print("  (no history yet)")
+        return
+    end
+    print(string.format("  %-4s %-4s %-10s %-8s %-25s %-12s %s",
+        "#", "ID", "Action", "Priority", "Name", "Due Date", "Timestamp"))
+    print("  " .. string.rep("-", 88))
+    for i, e in ipairs(entries) do
+        local label = PRIORITY_LABELS[e.priority] or "?"
+        print(string.format("  %-4d %-4d %-10s %-8s %-25s %-12s %s",
+            i,
+            e.id,
+            e.action,
+            label,
+            e.name,
+            e.due_date ~= "" and e.due_date or "—",
+            e.timestamp))
+    end
+end
 
-    local id = tonumber(prompt("\n  Enter task ID to edit: "))
-    if not id then
-        print("  Invalid ID. Cancelled.")
+-- undo_task()
+-- Shows the full history with list indices, lets the user pick one entry,
+-- and restores that task to the active task list.
+--
+-- Undo behaviour by action type:
+--   "completed" → task already exists in task_list with status "done";
+--                 resets its status back to "pending".
+--   "deleted"   → task was removed; re-inserts it with its original fields
+--                 and the SAME original id (next_id is not affected because
+--                 task_manager only advances next_id forward on add()).
+--
+-- After a successful undo the history entry is removed so it cannot be
+-- undone twice, and both task and history files are saved.
+local function undo_task()
+    print("\n── Undo from History ──")
+    local all = history.get_all()
+    print_history_indexed(all)
+
+    if #all == 0 then return end
+
+    local idx = tonumber(prompt("\n  Enter # to undo (or 0 to cancel): "))
+    if not idx or idx == 0 then
+        print("  Cancelled.")
+        return
+    end
+    if idx < 1 or idx > #all then
+        print("  Invalid number. Cancelled.")
         return
     end
 
-    local task = tasks.getById(id)
-    if not task then
-        print("  Task not found.")
+    local entry = all[idx]
+
+    if entry.action == "completed" then
+        -- Task still lives in task_list with status "done" — revert it
+        local found = false
+        for _, t in ipairs(tasks.get_all()) do
+            if t.id == entry.id then
+                t.status = "pending"
+                found = true
+                break
+            end
+        end
+        if not found then
+            print("  Could not find task in list (it may have been deleted separately).")
+            return
+        end
+        print(string.format("  Task #%d \"%s\" restored to pending.", entry.id, entry.name))
+
+    elseif entry.action == "deleted" then
+        -- Task was fully removed — re-insert it with all original fields intact
+        tasks.restore(entry.id, entry.name, entry.due_date, entry.description, entry.priority)
+        print(string.format("  Task #%d \"%s\" restored to task list.", entry.id, entry.name))
+
+    else
+        print("  Unknown action type — cannot undo.")
         return
     end
 
-    print("  Leave fields blank to keep current values.\n")
-
-    local name = prompt("  New Name [" .. task.name .. "]: ")
-    if name == "" then name = task.name end
-
-    local due_date = prompt("  New Due Date [" .. (task.due_date ~= "" and task.due_date or "—") .. "]: ")
-    if due_date == "" then due_date = task.due_date end
-
-    local description = prompt("  New Description [" .. (task.description ~= "" and task.description or "—") .. "]: ")
-    if description == "" then description = task.description end
-
-    print("  Priority: 1=High  2=Medium  3=Low")
-    local pInput = prompt("  New Priority [" .. task.priority .. "]: ")
-    if pInput == "" then pInput = tostring(task.priority) end
-    local priority = tonumber(pInput)
-    
-    if not priority then
-        print("  Invalid priority. Keeping current value.")
-        priority = task.priority
-    end
-    if priority < 1 or priority > 3 then
-        print("  Out of bounds. Keeping current value.")
-        priority = task.priority
-    end
-
-    tasks.update(id, name, due_date, description, priority)
+    -- Remove this entry from history so it can't be undone twice
+    history.remove_entry(idx)
     storage.save(tasks.get_all())
+    history.save()
+end
 
-    print("  Task updated.")
+-- view_history()
+-- Shows a sub-menu letting the user browse all, completed-only, or deleted-only history,
+-- undo an entry, or clear all history.
+local function view_history()
+    print("\n── Task History ──")
+    print("  a. All history")
+    print("  c. Completed tasks only")
+    print("  d. Deleted tasks only")
+    print("  u. Undo a task")
+    print("  x. Clear all history")
+    print("  b. Back")
+    local choice = prompt("  Choice: ")
+
+    if choice == "a" then
+        print("\n── Full History ──")
+        print_history(history.get_all())
+
+    elseif choice == "c" then
+        print("\n── Completed Tasks ──")
+        print_history(history.get_by_action("completed"))
+
+    elseif choice == "d" then
+        print("\n── Deleted Tasks ──")
+        print_history(history.get_by_action("deleted"))
+
+    elseif choice == "u" then
+        undo_task()
+
+    elseif choice == "x" then
+        local confirm = prompt("  Are you sure you want to clear all history? (yes/no): ")
+        if confirm == "yes" then
+            history.clear()
+            print("  History cleared.")
+        else
+            print("  Cancelled.")
+        end
+
+    elseif choice == "b" then
+        return  -- go back to main menu
+
+    else
+        print("  Invalid option.")
+    end
 end
 
 -- ─── Main Menu ───────────────────────────────────────────────────────────────
@@ -170,15 +315,16 @@ local function print_menu()
     print("║  2. Add task             ║")
     print("║  3. Complete task        ║")
     print("║  4. Delete task          ║")
-    print("║  5. Edit task            ║")
+    print("║  5. View history         ║")
     print("║  0. Exit                 ║")
     print("╚══════════════════════════╝")
 end
 
 -- ─── Startup ─────────────────────────────────────────────────────────────────
 
--- Load saved tasks from disk into memory on startup.
+-- Load saved tasks and history from disk into memory on startup.
 tasks.load_tasks(storage.load())
+history.load()
 
 -- Seed with sample data if no tasks exist yet (first run).
 if #tasks.get_all() == 0 then
@@ -206,7 +352,7 @@ while true do
     elseif choice == "4" then
         delete_task()
     elseif choice == "5" then
-        edit_task()
+        view_history()
     elseif choice == "0" then
         print("\nGoodbye!\n")
         break
