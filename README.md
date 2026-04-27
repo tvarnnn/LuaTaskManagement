@@ -57,8 +57,12 @@ Press `0` then `Enter` to exit.
 - Add tasks with a name, due date, description, and priority
 - Priority levels: High, Medium, Low
 - Mark tasks as done or delete them
+- Edit existing tasks
 - Tasks are sorted by priority automatically
 - Data is saved to a file and persists between sessions
+- Full task history (completed and deleted tasks)
+- Restore tasks from history (undo complete or delete)
+- Clear history
 
 ---
 
@@ -68,5 +72,6 @@ Press `0` then `Enter` to exit.
 main.lua          — Terminal UI, menu loop, and user input handling
 task_manager.lua  — In-memory task list and CRUD operations
 storage.lua       — Saves and loads tasks to/from a local file
+task_history.lua  — Tracks completed and deleted tasks; supports undo
 tasks_data.lua    — Auto-generated save file (created on first run)
 ```
